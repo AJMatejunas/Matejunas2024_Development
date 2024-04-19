@@ -1,0 +1,540 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%NOTE: THIS SCRIPT IS ONLY FOR USE WITH GRID IMAGES. USE OTHER CODES FOR7
+%FINITE ELEMENT VALIDATION.
+
+
+%This code is written to evaluate the effects of smoothing and noise on the
+%identification of viscoelastic constitutitve parameters using the image
+%based inertial impact test. 
+
+%Authors: Andrew Matejunas, 
+% THIS CODE IS HEAVILY ADAPTED FROM main_IBIIProcessing_v1_0r 
+%Date completed: 2022-06-24
+
+%Version History/changelog
+ %V2- added 3 initial guesses to check convergence
+ %V3- added correction to shear and Y strain
+   %2022-11-22: Added plotting in a separate function in attempt to prevent
+    %GPU crashes
+ %V4- 2022-12-8 Perfomance increase pass to improve computational time
+      %Narrowed upper and lower bounds on parameter identification
+      %increased step tolerance for fmincon to 1e-3
+      %increased downsampling in X to 6 pixels so that downsampling is
+        %comparible
+ %V5- 2022-12-9: Made spacial smoothing kernal asymmetric
+      %2022-12-13: Reverted to symmetric Smoothing Kernals
+      %2023/01/12: Converted the cost function to only consider and
+        %identify shear
+      %2023/01/18: Changed script file to SGIdentification_
+                   %SmoothingEvaluationV5_SeparateKG_SameSmooth. Added in
+                   %the capability to identify bulk modulus after first
+                   %identifying shear modulus and the associated time
+                   %constant
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Initialize (clear memory and figures)
+close all
+clear variables
+clc
+
+%% Remove some options from original IBII codes
+hardCodePath=0;
+FEValidMode=0;
+calcKinFieldsFromDisp=1;
+saveGridData=0;
+%% Define Test Dseignation
+TestDeg=char(cell2mat(inputdlg('Input Test Designation')));
+
+
+ %% Create structute of known parameters
+    Einf=2.98E9;
+    nu=0.26;
+
+    exactProps.Kinf=Einf/(3*(1-2*nu));
+    exactProps.Ginf=Einf/(2*(1+nu));
+    exactProps.nu=0;
+  
+    
+
+%% Create reasonable upper bounds
+ub=[2E9;... G1
+    100E-6]; %tau_1
+ubK=5e9;
+%% Create reasonable lower bounds
+lb=[100E6;... G1
+    1E-6]; %tau_1
+lbK=500e6;
+%% Create Matrix of initial guesses
+    %Eint=2.5E9;
+    %Choose a random 3x3 matrix of initial guress multipliers. Multipliers
+        %will be uniformly distributed random numbers in the interval [0,1]
+ 
+    intMult=rand(2,3);
+    intMultK=rand(1,3);
+  
+    %Create 3X3 matrix of initial guess parameters
+     intMatrix=lb+(ub-lb).*intMult;
+     intVecK=lbK+(ubK-lbK).*intMultK;
+%     intGuess=[Eint/(3*(1-2*nu));... K1
+%               Eint/(2*(1+nu));.... G1
+%               10E-6];... tau1
+    %% Create Solve Opts Structure
+    SolveOpts.constnu=0; %No longer constrain Poisson's ratio
+    SolveOpts.KGsame=false; %simultaneously identify K and G
+    SolveOpts.identEinf=false;
+    SolveOpts.identForm='KG';
+    SolveOpts.minFunc='fmincon';
+
+    %% options for the fmincon algorithm
+    minOpts.Algorithm='interior-point';
+    %minOpts.Algorithm='sqp';
+    minOpts.UseParallel=true;
+    minOpts.StepTolerance=1e-3;
+
+%% Add reference parameters file 
+[RefPar.file,RefPar.path]=uigetfile('*.mat',...
+    'Choose Mat file containing reference constitutive pamrameters');
+RefPar=load(strcat(RefPar.path,'/',RefPar.file),'MatProps');
+
+%% Choose Directory to save results
+savePath=uigetdir({},'Choose Folder to Save Results');
+
+%% Generate bounds of reasonable accuracy (10%)
+%K
+RefPar.Kp10=RefPar.MatProps.Ki*(1+.1);
+RefPar.Km10=RefPar.MatProps.Ki*(1-.1);
+
+%G
+RefPar.Gp10=RefPar.MatProps.Gi*(1+.1);
+RefPar.Gm10=RefPar.MatProps.Gi*(1-.1);
+
+%tau
+RefPar.taup10=RefPar.MatProps.tau*(1+.1);
+RefPar.taum10=RefPar.MatProps.tau*(1-.1);
+
+%% INITIALISE: Add path for processing functions
+%(this section taken from main_IBIIProcessing_v1_0r
+fprintf('Adding pathes for processing functions.\n')
+% Add the path for the grid method code and other useful functions:
+funcPath = [pwd,'\Functions\'];
+
+% If the default path is not found we should find it
+if exist(funcPath,'file') ~= 7
+    hWarn = warndlg('Folder for processing functions not found.',...
+        'Function folder not found');
+    waitfor(hWarn);
+    funcPath = uigetdir(pwd,'Locate Processing Function Folder');
+end
+addpath(funcPath);
+addpath([funcPath,'GridMethodToolbox\']);
+
+%% LOAD RAW DATA FILES: Raw .tiff images
+    
+    fprintf('Loading reference image from the selected test data folder.\n')
+    if ~hardCodePath
+        [imageFile,imagePath] = uigetfile({'*.*','All Files'},'Select the first image in the sequence');
+    else   
+        imageFile = 'DefGridImage_001.tiff';
+        imagePath = 'E:\Matlab_WorkingDirectory\1_IBIITest_Data\TestData_ID_CFIPQIso_HalfPulse\'; 
+    end
+
+%% Load Processing Parameter Data Structures
+fprintf('Loading processing parameters file.\n')
+initPath = imagePath;
+initFile = 'processingParameters.mat';
+if exist([initPath,initFile],'file') ~= 2
+    hWarn = warndlg('Processing parameter file does not exist.','Processing parameters not found');
+    waitfor(hWarn);
+    [initFile,initPath,~] = uigetfile('*.mat','Locate processing parameter file');
+end
+% Load the processing parameters from file
+
+
+load([initPath,initFile])
+
+% Store the FE valid mode parameter
+globalOpts.FEValidMode = FEValidMode;
+globalOpts.calcKinFieldsFromDisp = calcKinFieldsFromDisp;
+
+%% Define Smoothing Opts
+
+
+quest='Choose Temporal Smoothing Method';
+TempOpts=questdlg(quest,'Temporal Method','FF only','FF and WA','None',...
+    'FF only');
+
+switch TempOpts
+    case 'FF only'
+        smoothingOpts.FFTempSmooth=1;
+        smoothingOpts.WATempSmooth=0;
+        
+        % Sweep of Temporal frame lengths
+        %TempKernVec=[0,5:2:25];
+        TempKernVec=0;
+        TempKernNum=length(TempKernVec);
+        
+    case 'FF and WA'
+        smoothingOpts.FFTempSmooth=1;
+        smoothingOpts.WATempSmooth=1;
+        TempKernVec=[0,5:2:25];
+        TempKernNum=length(TempKernVec);
+        
+    case 'None'
+        smoothingOpts.WATempSmooth=0;
+        smoothingOpts.FFTempSmooth=0;
+end
+
+if smoothingOpts.FFTempSmooth==1
+    
+    quest='Pad Temporal Filter?';
+    TempPadOpts=questdlg(quest,'Temporal Padding','Yes','No','Yes');
+
+    switch TempPadOpts
+        case 'Yes'
+            smoothingOpts.FFTemporalPad=1;
+                    case 'No'
+            smoothingOpts.FFTemporalPad=0;
+    end
+end
+
+smoothingOpts.spatialSmooth=true;      
+%Spatial Smoothing disabled
+%Define sweep of spatial Kernels
+% SpaKernVec=[0,5:2:19];
+SpaKernVec=0;
+
+%record Number of Kernels
+SpaKernNum=length(SpaKernVec);
+
+%% Define whether Noise should be added
+quest='Add Noise?';
+noiseChoice='No';
+
+imageNoise.addNoise=false;
+   
+%% Determine weather to run interpolated correction on the displacement 
+    %fields
+    
+fprintf('Determining dispacement filed correction options \n')
+DispCorr.Opt='Yes';
+DispCorr.int=10;
+DispCorr.Method='LinGrad';
+DispCorr.PitchFitKern=2;
+DispCorr.strainMethod='GridPeriod';
+DispCorr.strainPitchNum=1;
+
+%% Define Sample Condtioning Options
+
+CondOpts.ImpCens=20;
+CondOpts.FreeCens=20;
+CondOpts.Xds=3;
+CondOpts.Yds=1;
+CondOpts.Tds=1;
+
+
+if CondOpts.Tds <=1
+    CondOpts.TempDS=false;
+else
+    CondOpts.TempDS=true;
+end
+
+%% Generate Progress bar
+itCount=0;
+itTotal=TempKernNum*SpaKernNum*3;
+
+progmsg=strcat('0/',num2str(itTotal),...
+    ' Smoothing Iterations Complete');
+Progress=waitbar(0,progmsg);
+
+%% Run the identification for every copy smoothing Kernal
+TempK=zeros(3,1);
+TempG=zeros(3,1);
+TempTau=zeros(3,1);
+
+%initiaize cost function vector
+TempPhi=zeros(3,1);
+TempPhiK=zeros(3,1);
+
+%% Initialize contitutive Parameter 
+ConstitutiveParam=zeros(TempKernNum,SpaKernNum,3);
+for k=1:TempKernNum
+    for m=1:SpaKernNum
+        
+
+            if TempKernVec(k)==0
+                smoothingOpts.FFTempSmooth=0;
+                smoothingOpts.WATempSmooth=0;
+            else
+                switch TempOpts
+                    case 'FF only'
+                        smoothingOpts.FFTempSmooth=1;
+                        smoothingOpts.WATempSmooth=0;
+
+
+                    case 'FF and WA'
+                        smoothingOpts.FFTempSmooth=1;
+                        smoothingOpts.WATempSmooth=1;
+
+                    case 'None'
+                        smoothingOpts.WATempSmooth=0;
+                        smoothingOpts.FFTempSmooth=0;
+                end
+                smoothingOpts.FFTemporalKernal=[TempKernVec(k),3];
+                smoothingOpts.WATemporalKernal=[TempKernVec(k),3];
+            end
+
+            if SpaKernVec(m)==0
+                smoothingOpts.spatialSmooth=0;
+            else
+                smoothingOpts.spatialSmooth=1;
+                smoothingOpts.spatialKernal=SpaKernVec(m)*[1,1];
+            end
+            
+            switch smoothingOpts.FFTemporalPad
+                case true
+                    if TempKernVec(k)<=6
+                        smoothingOpts.FFTemporalPadFrames=3;
+                    else 
+                        smoothingOpts.FFTemporalPadFrames=...
+                            ceil(TempKernVec(k)/2);
+                    end
+            end
+%             fprintf('------------------------------------------------------------- \n')
+%             fprintf(strcat('Processing iteration',itNum,' \n'))
+%             fprintf('------------------------------------------------------------- \n')
+            %% IMAGE PROCESSING: Use the Grid Method to extract displacement fields
+            if ~FEValidMode
+                % Process the raw tiff images using the grid method code developed by
+                % Grediac et al.
+                fprintf('\n--------------------------------------------------------------\n')
+                fprintf('GRID METHOD PROCESSING\n')
+                fprintf('--------------------------------------------------------------\n')
+
+                %--------------------------------------------------------------------------
+                % GRID IMAGE PROCESSING
+
+                % Check if the images have already been processed otherwise process the data
+                gridDataSavePath = imagePath;
+                gridDataFile = 'GridMethod_ProcessedData.mat';
+
+                %fprintf('Checking for existing processed data file.\n')
+                processGridImages = true;
+
+               
+                   % fprintf('Processing images using the grid method toolbox.\n')
+                    % Process the image squence with the grid method toolbox
+                    [grid,pos,disp] = func_gridMethodImageProcessing_AJM(imagePath,...
+                        imageFile,...
+                        grid,gridMethodOpts,imageNoise);
+                                           
+                                      
+
+                %--------------------------------------------------------------------------
+                % Update Geometry and Number of Frames Based on Displacement Matrix Size
+                %fprintf('Updating geometry variables based on the size of displacement field matrices.\n')
+                [specimen,grid] = func_updateSpecGeom(specimen,grid,disp);
+
+                % Currently the rotations are unused so remove them to save RAM
+                %disp = rmfield(disp,'rot');
+            end
+
+            %--------------------------------------------------------------------------
+            % Create the time vector based on the number of frames in the disp struct
+            time.numFrames = size(disp.x,3);
+            time.vec = 0:time.step:(size(disp.x,3)-1)*time.step;
+
+            %Create arrays of x and y vectors
+            X_vec=pos.x;
+            Y_vec=pos.y;
+
+            %% POST-PROCESSING: Smoothing and Kinematic Field Derivation
+            % Smooth the displacement data and then calculate acceleration and strains
+            % Extrapolate the data to account for the missing pitch on the edges
+            fprintf('\n--------------------------------------------------------------\n')
+            fprintf('POST PROCESSING: Smoothing and Kinematic Field Calculation\n')
+            fprintf('--------------------------------------------------------------\n')
+            %% Perfom corrections if needed
+            switch    DispCorr.Opt
+                case 'Yes'
+                    fprintf('Saving Raw Displacement Fields \n')
+                    RawDisp=disp;
+                    fprintf('Correcting Grid Method Displacements along specimen edges')
+                    [disp,DispCorr,grid,ProgramVersions]=func_CorrectGMDisp(disp,...
+                        DispCorr,grid,pos);
+
+
+                case 'No'
+                    fprintf('No Displacement corrections performed \n')
+            end
+
+
+            % Calculate the kinematic fields from displacement fields using
+            % displacements from images or displacements from FE data
+           
+                %--------------------------------------------------------------------------
+                % Load the Reference Image and Determine Where the Free Edge is
+                %fprintf('Obtaining and setting the free edge location.\n')
+                [freeEdge,specimen,disp] = func_getFreeEdge(globalOpts.hardCodeFreeEdge,...
+                    imagePath,imageFile,specimen,disp);
+
+                %--------------------------------------------------------------------------
+                % Smooth and Calculate Strain
+                fprintf('Calculating strain from the displacement fields.\n')
+                [disp,strainRaw,strainRate] = func_smoothCalcStrain(globalOpts,pos,time,...
+                    grid,disp,smoothingOpts,extrapOpts);
+                
+
+                fprintf('Correcting Y strain \n')
+                 strain=func_PostCorrectStrainV2(grid,strainRaw,pos,time,DispCorr,...
+                    smoothingOpts);
+                
+    end
+end
+close(Progress)
+
+
+%% Calculate limits 
+Diffy=strainRaw.y-strain.y;
+Diffs=strainRaw.s-strain.s;
+Difflim.y=0.1*[min(Diffy,[],'all'),max(Diffy,[],'all')];
+Difflim.s=0.1*[min(Diffs,[],'all'),max(Diffs,[],'all')];
+
+strainlim.s=0.1*[min(strain.s,[],"all"),max(strain.s,[],"all")];
+strainlim.y=0.1*[min(strain.y,[],"all"),max(strain.y,[],"all")];
+
+%% Plot Results
+figure('Units','Normalized','OuterPosition',[0,0,1,1])
+
+for k=1:length(time.vec)
+    Fnum=num2str(k);
+
+    CorrDiffY=squeeze(strainRaw.y(:,:,k)-strain.y(:,:,k));
+    CorrDiffS=squeeze(strainRaw.s(:,:,k)-strain.s(:,:,k));
+
+    RawStrainY=squeeze(strainRaw.y(:,:,k));
+    StrainY=squeeze(strain.y(:,:,k));
+
+    RawStrainS=squeeze(strainRaw.s(:,:,k));
+    StrainS=squeeze(strain.s(:,:,k));
+
+    %% Plot uncorrected strains
+    %normal Y strains
+    subplot(3,2,1)
+    imagesc(pos.x,pos.y,RawStrainY)
+    xlabel('Xcoordinate')
+    ylabel('Ycoordinate')
+    title(strcat('Raw Strain_{yy} Frame',Fnum))
+    colormap('hot')
+    colorbar
+    caxis(strainlim.y)
+    set(gca,'YDir','normal')
+    set(gca,'FontSize',14)
+    %shear strains
+    subplot(3,2,2)
+    imagesc(pos.x,pos.y,RawStrainS)
+    xlabel('Xcoordinate')
+    ylabel('Ycoordinate')
+    title(strcat('Raw Strain_{xy} Frame',Fnum))
+    colormap('hot')
+    colorbar
+    caxis(strainlim.s)
+    set(gca,'YDir','normal')
+    set(gca,'FontSize',14)
+    
+    %% Plot Corrected strains
+    %normal Y strains
+    subplot(3,2,3)
+    imagesc(pos.x,pos.y,StrainY)
+    xlabel('Xcoordinate')
+    ylabel('Ycoordinate')
+    title(strcat('Corr Strain_{yy} Frame',Fnum))
+    colormap('hot')
+    colorbar
+    caxis(strainlim.y)
+    set(gca,'YDir','normal')
+    set(gca,'FontSize',14)
+    %shear strains
+    subplot(3,2,4)
+    imagesc(pos.x,pos.y,StrainS)
+    xlabel('Xcoordinate')
+    ylabel('Ycoordinate')
+    title(strcat('Corr Strain_{xy} Frame',Fnum))
+    colormap('hot')
+    colorbar
+    caxis(strainlim.s)
+    set(gca,'YDir','normal')
+    set(gca,'FontSize',14)
+    
+    %% Difference
+    %normal Y strains
+    subplot(3,2,5)
+    imagesc(pos.x,pos.y,CorrDiffY)
+    xlabel('Xcoordinate')
+    ylabel('Ycoordinate')
+    title(strcat('Raw-Corr Strain_{yy} Frame',Fnum))
+    colormap('hot')
+    colorbar
+    caxis(Difflim.y)
+    set(gca,'YDir','normal')
+    set(gca,'FontSize',14)
+    %shear strains
+    subplot(3,2,6)
+    imagesc(pos.x,pos.y,CorrDiffS)
+    xlabel('Xcoordinate')
+    ylabel('Ycoordinate')
+    title(strcat('Raw-Corr Strain_{xy} Frame',Fnum))
+    colormap('hot')
+    colorbar
+    caxis(Difflim.s)
+    set(gca,'YDir','normal')
+    set(gca,'FontSize',14)
+
+    %% Save figure
+    figSaveName=strcat(savePath,'/StrainCorrV2Map');
+    saveas(gcf,figSaveName,'fig')
+    saveas(gcf,figSaveName,'png')
+
+end
+
+%% Plot Zoomed Differences
+figure('Units','Normalized','OuterPosition',[0,0,1,1])
+
+for k=1:length(time.vec)
+    Fnum=num2str(k);
+
+    CorrDiffY=squeeze(strainRaw.y(:,:,k)-strain.y(:,:,k));
+    CorrDiffS=squeeze(strainRaw.s(:,:,k)-strain.s(:,:,k));
+ 
+    %% Difference
+    %normal Y strains
+    subplot(2,1,1)
+    imagesc(pos.x,pos.y,CorrDiffY)
+    xlabel('Xcoordinate')
+    ylabel('Ycoordinate')
+    title(strcat('Raw-Corr Strain_{yy} Frame',Fnum))
+    colormap('hot')
+    colorbar
+    caxis(Difflim.y)
+    set(gca,'YDir','normal')
+    set(gca,'FontSize',14)
+    %shear strains
+    subplot(2,2,6)
+    imagesc(pos.x,pos.y,CorrDiffS)
+    xlabel('Xcoordinate')
+    ylabel('Ycoordinate')
+    title(strcat('Raw-Corr Strain_{xy} Frame',Fnum))
+    colormap('hot')
+    colorbar
+    caxis(Difflim.s)
+    set(gca,'YDir','normal')
+    set(gca,'FontSize',14)
+
+    %% Save figure
+    figSaveName=strcat(savePath,'/ZoomCorrV2Map');
+    saveas(gcf,figSaveName,'fig')
+    saveas(gcf,figSaveName,'png')
+
+end
+
+
+

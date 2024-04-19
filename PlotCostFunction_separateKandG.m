@@ -1,0 +1,122 @@
+% This script is written to plot the cost functions for both finite element
+    % data and from images using separate cost functions for G and tau and
+    % Konly. 
+
+  
+ %% Choose directory to save 
+ saveDir=uigetdir('','choose directory to save results');
+
+ %% load FE data
+ [FEname,FEpath]=uigetfile('*.mat', ...
+     'Choose file containing FE stress gauge data');
+ FEfile=strcat(FEpath,'/',FEname);
+ FE=load(FEfile);
+
+%% Define Test Dseignation
+TestDeg=char(cell2mat(inputdlg('Input Test Designation')));
+
+ %% load reference properties
+ [RefName,RefPath]=uigetfile('*.mat', ...
+     'Choose file containing reference constitutive parameters');
+ RefFile=strcat(RefPath,'/',RefName);
+ load(RefFile);
+
+%% Define Sample Condtioning Options
+CondOpts.ImpCens=20;
+CondOpts.FreeCens=20;
+CondOpts.Xds=3;
+CondOpts.Yds=1;
+CondOpts.Tds=1;
+
+if CondOpts.Tds <=1
+    CondOpts.TempDS=false;
+else
+    CondOpts.TempDS=true;
+end
+
+ %% calculate finite element cost functions
+ Krat=0.75:0.05:1.25;
+ Grat=0.75:0.05:1.25;
+ Trat=0.75:0.05:1.25;
+ Kvec=MatProps.Ki*(0.75:0.05:1.25);
+ Gvec=MatProps.Gi*(0.75:0.05:1.25);
+ Tvec=MatProps.tau*(0.75:0.05:1.25);
+ FE.phiG=zeros(length(Gvec),length(Tvec));
+ FE.phiK1D=zeros(length(Kvec));
+ FE.phiK=zeros(length(Kvec),length(Tvec));
+
+ for k=1:length(Gvec)
+     for m=1:length(tau_vec)
+    knownParam=[MatProps.Kinf,MatProps.Ginf,MatProps.nu,false,Kvec(6)];
+    constParam=[Gvec(k),Tvec(m)];
+    FE.phiG(k,m)=func_ViscoShearCost(FE.Full_SG.s,knownParam,constParam, ...
+        FE.strain.s,FE.time.vec,CondOpts);
+    knownParamK=[MatProps.Kinf,MatProps.Ginf,MatProps.nu,false,Gvec(m),...
+        Tvec(6)];
+    constParamK=Kvec(k);
+    FE.phiK(k,m)=func_ViscoBulkCostSG(FE.Full_SG.x,knownParamK, ...
+        constParamK,FE.strain);
+     end
+     knownParam1D=[MatProps.Kinf,MatProps.Ginf,MatProps.nu,false,Gvec(6),...
+        Tvec(6)];
+     FE.phiK1D(k)=func_ViscoBulkCostSG(FE.Full_SG.x,knownParam1D, ...
+        constParamK,FE.strain);
+ end
+FE.phiKlog=log(FE.phiK);
+FE.phiGlog=log(FE.phiG);
+FE.phiK1Dlog=log(FE.phiK1D);
+%% Plot Evaluation figures for FE
+figure('Units','centimeters','InnerPosition',[10,10,18.2,18.2])
+colormap('cool')
+subplot(2,2,1)
+contourf(Grat,Trat,FE.phiG',50)
+xlabel('G_1/G_{1,ref}')
+ylabel('\tau_1/\tau_{1,ref}')
+cx=colorbar;
+cx.Label.String='\phi_G';
+
+subplot(2,2,2)
+contourf(Krat,Grat,FE.phiK',50)
+xlabel('K_1/G_{1,ref}')
+ylabel('G_1/G_{1,ref}')
+cx=colorbar;
+cx.Label.String='\phi_K';
+
+subplot(2,2,3)
+contourf(Grat,Trat,FE.phiGlog',50)
+xlabel('G_1/G_{1,ref}')
+ylabel('\tau_1/\tau_{1,ref}')
+cx=colorbar;
+cx.Label.String='log(\phi_G)';
+set(gca,'ColorScale','log')
+
+subplot(2,2,4)
+contourf(Krat,Grat,FE.phiKlog',50)
+xlabel('K_1/G_{1,ref}')
+ylabel('G_1/G_{1,ref}')
+cx=colorbar;
+cx.Label.String='log(\phi_K)';
+set(gca,'ColorScale','log')
+
+figSaveName=strcat(saveDir,'/',TestDeg,'_FESeperateCostFunctions');
+saveas(gcf,figSaveName,'fig')
+saveas(gcf,figSaveName,'svg')
+
+%% Plot 1D
+figure('Units','centimeters','InnerPosition',[10,10,9.1,9.1])
+plot(Krat,FE.phiK1D)
+xlabel('K_1/K_{1,ref}')
+ylabel('\phi_K')
+
+figSaveName=strcat(saveDir,'/',TestDeg,'_FEPhiK1D');
+saveas(gcf,figSaveName,'fig')
+saveas(gcf,figSaveName,'svg')
+
+figure('Units','centimeters','InnerPosition',[10,10,9.1,9.1])
+plot(Krat,FE.phiK1Dlog)
+xlabel('K_1/K_{1,ref}')
+ylabel('\phi_K')
+
+figSaveName=strcat(saveDir,'/',TestDeg,'_FEPhiK1Dlog');
+saveas(gcf,figSaveName,'fig')
+saveas(gcf,figSaveName,'svg')

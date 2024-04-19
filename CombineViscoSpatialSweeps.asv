@@ -1,0 +1,156 @@
+% This script is written to combine 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%% Initialize
+close all; clear variables; clc
+
+%% Choose Folder to save combined files in
+ComSavePath=uigetdir('','Choose folder in which to save combined');
+
+%% Choose whether to combine noise free data
+quest='combine noise free data';
+ComNN=questdlg(quest);
+%% Load G errors for smaller kernels
+switch ComNN
+    case 'Yes'
+[GSSnameNN,GSSpathNN]=uigetfile('*.mat', ...
+    'Choose file containing smaller G spatial kernals without Noise');
+GSSfileNN=strcat(GSSpathNN,'/',GSSnameNN);
+
+fprintf('Loading Small smoothing G Errors without Noise \n')
+GSS.NN=load(GSSfileNN);
+end
+
+[GSSnameWN,GSSpathWN]=uigetfile('*.mat', ...
+    'Choose file containing smaller G spatial kernals with Noise');
+GSSfileWN=strcat(GSSpathWN,'/',GSSnameWN);
+
+fprintf('Loading large smoothing G Errors with Noise \n')
+GSS.WN=load(GSSfileWN);
+
+
+%% Load K Errors for Smaller Kernals
+switch ComNN
+    case 'Yes'
+[KSSnameNN,KSSpathNN]=uigetfile('*.mat', ...
+    'Choose file containing smaller K spatial kernals without Noise');
+    KSSfileNN=strcat(KSSpathNN,'/',KSSnameNN);
+    fprintf('Loading Small smoothing K Errors without Noise \n')
+    KSS.NN=load(KSSfileNN);
+end
+
+[KSSnameWN,KSSpathWN]=uigetfile('*.mat', ...
+    'Choose file containing smaller K spatial kernals with Noise');
+KSSfileWN=strcat(KSSpathWN,'/',KSSnameWN);
+
+
+fprintf('Loading large smoothing K Errors with Noise \n')
+KSS.WN=load(KSSfileWN);
+
+
+%% Load G errors for larger kernals
+
+switch ComNN
+    case 'Yes'
+[GLSnameNN,GLSpathNN]=uigetfile('*.mat', ...
+        'Choose file containing G larger spatial kernals without Noise');
+    GLSfileNN=strcat(GLSpathNN,'/',GLSnameNN);
+    fprintf('Loading large smoothing G Errors without Noise \n')
+    GLS.NN=load(GLSfileNN);
+end
+
+[GLSnameWN,GLSpathWN]=uigetfile('*.mat', ...
+    'Choose file containing G larger spatial kernals with Noise');
+GLSfileWN=strcat(GLSpathWN,'/',GLSnameWN);
+fprintf('Loading large smoothing G Errors with Noise \n')
+GLS.WN=load(GLSfileWN);
+
+%% Load K errors for larger kernals
+switch ComNN
+    case 'Yes'
+[KLSnameNN,KLSpathNN]=uigetfile('*.mat', ...
+        'Choose file containing K for larger spatial kernals without Noise');
+    KLSfileNN=strcat(KLSpathNN,'/',KLSnameNN);
+    fprintf('Loading large smoothing K Errors without Noise \n')
+    KLS.NN=load(KLSfileNN);
+end
+
+[KLSnameWN,KLSpathWN]=uigetfile('*.mat', ...
+    'Choose file containing K for larger spatial kernals with Noise');
+KLSfileWN=strcat(KLSpathWN,'/',KLSnameWN);
+
+
+fprintf('Loading large smoothing K Errors with Noise\n')
+KLS.WN=load(KLSfileWN);
+
+
+%% Combine Errors with noise
+
+% G errors
+fprintf('combining Noisy G systematic error\n')
+[NoisyGSVec,sysErr.G]=func_MergeSpaKerns(...
+    GSS.WN.SpaKernVec,GLS.WN.SpaKernVec,GSS.WN.sysErr.G,GLS.WN.sysErr.G);
+
+fprintf('combining Noisy G random error \n')
+[~,ranErr.G]=func_MergeSpaKerns(...
+    GSS.WN.SpaKernVec,GLS.WN.SpaKernVec,GSS.WN.ranErr.G,GLS.WN.ranErr.G);
+
+fprintf('combining noisy G total error \n')
+[~,totErr.G]=func_MergeSpaKerns(...
+    GSS.WN.SpaKernVec,GLS.WN.SpaKernVec,GSS.WN.totErr.G,GLS.WN.totErr.G);
+
+fprintf('Combining identified shear moduli \n')
+Ident.G=func_MergeNoisySpaIdent(GSS.WN.Ident.G,GLS.WN.Ident.G);
+
+fprintf('Shear combination complete \n')
+
+%K errors
+fprintf('Combining noisy K systematic error \n')
+[NoisyKSVec,sysErr.K.I]=func_MergeSpaKerns(...
+    KSS.WN.SpaKernVec,KLS.WN.SpaKernVec, ...
+    KSS.WN.sysErr.K.I,KLS.WN.sysErr.K.I);
+
+fprintf('Combining noisy K random error \n')
+[~,ranErr.K.I]=func_MergeSpaKerns(...
+    KSS.WN.SpaKernVec,KLS.WN.SpaKernVec, ...
+    KSS.WN.ranErr.K.I,KLS.WN.ranErr.K.I);
+
+fprintf('Combining noisy K total error \n')
+[~,totErr.K.I]=func_MergeSpaKerns(...
+    KSS.WN.SpaKernVec,KLS.WN.SpaKernVec, ...
+    KSS.WN.totErr.K.I,KLS.WN.totErr.K.I);
+
+fprintf('Combining Noisy Identified K \n')
+Ident.K=func_MergeNoisySpaIdent(KSS.WN.Ident.K.I,KLS.WN.Ident.K.I);
+
+fprintf('Combination of bulk modulus complete \n')
+
+%Tau errors
+fprintf('Combining noisy tau systematic error \n')
+[~,sysErr.tau.I]=func_MergeSpaKerns(...
+    KSS.WN.SpaKernVec,KLS.WN.SpaKernVec, ...
+    KSS.WN.sysErr.tau.I,KLS.WN.sysErr.tau.I);
+
+fprintf('Combining noisy tau random error \n')
+[~,ranErr.tau.I]=func_MergeSpaKerns(...
+    KSS.WN.SpaKernVec,KLS.WN.SpaKernVec, ...
+    KSS.WN.ranErr.tau.I,KLS.WN.ranErr.tau.I);
+
+fprintf('Combining noisy tau total error \n')
+[~,totErr.tau.I]=func_MergeSpaKerns(...
+    KSS.WN.SpaKernVec,KLS.WN.SpaKernVec, ...
+    KSS.WN.totErr.tau.I,KLS.WN.totErr.tau.I);
+
+fprintf('Combining Noisy Identified tau \n')
+Ident.tau=func_MergeNoisySpaIdent(GSS.WN.Ident.tau.I,GLS.WN.Ident.tau.I);
+
+fprintf('Combination of time constant data complete \n')
+
+
+%% Save data
+SimDesig=char(cell2mat(inputdlg('Input test designation')));
+
+save

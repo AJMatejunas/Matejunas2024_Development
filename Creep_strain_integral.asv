@@ -1,0 +1,208 @@
+% This code is written to investigate the integral in the Shear stress
+    % equation for ABAQUS linear viscoelasticity in the time domain
+    
+%% initialize
+clear all, close all, clc
+
+%% Select data to load
+filename=uigetfile('*.mat','select SG data')
+propfile=uigetfile('*.mat','Load materials Properties file')
+
+
+%% load data
+fprintf('loading data \n')
+load(filename);
+
+%% load properties
+fprintf('Loading Materials properties file \n')
+load(propfile);
+
+G0=MatProps.G0;
+G1=MatProps.Gi;
+Ginf=G0-G1;
+g1=G1/G0;
+tau=MatProps.tau;
+
+%% Choose point from the middle of the sample
+Xind=length(stress.x(1,:,1))/2;
+Yind=length(stress.x(:,1,1))/2;
+
+
+%% Get relevant stress and strain for location
+MidStressXY=squeeze(stress.s(Yind,Xind,:));
+MidStrainXY=squeeze(strain.s(Yind,Xind,:));
+t=time.vec;
+
+%% plot stress strain curve at this location
+figure(1)
+plot(MidStrainXY,MidStressXY);
+title('Shear Stress Strain at center')
+xlabel('Shear Strain');
+ylabel('Shear Stress');
+
+saveas(gcf,strcat(testdeg,'MidShearSS.fig'));
+saveas(gcf,strcat(testdeg,'MidShearSS.png'));
+
+
+%% Plot Shear Strain vs time at this location
+figure(2)
+plot(time.vec*10^6,MidStrainXY);
+title('Shear strain at center')
+xlabel('Time (\mus)');
+ylabel('Shear strain');
+
+
+saveas(gcf,strcat(testdeg,'MidShearTime.fig'));
+saveas(gcf,strcat(testdeg,'MidShearTime.png'));
+
+
+%% plot exp -t/tau
+DecayFactor=exp(-t/tau);
+figure(3)
+plot(t*10^6,DecayFactor);
+
+title('Exponential Decay Factor')
+xlabel('time (\mus)')
+ylabel('exp(-t/\tau)')
+
+
+saveas(gcf,strcat(testdeg,'MidShear_Decay.fig'));
+saveas(gcf,strcat(testdeg,'MidShear_Decay.png'));
+
+%% Plot strains
+
+InstStrain=MidStressXY/G0;
+
+for it=1:length(t)
+    creep(:,it)=g1/tau*trapz(t(1:it),exp(-t(1:it)/tau).*MidStrainXY(it-(1:it)+1)',2);
+end
+
+figure(4)
+plot(t*10^6,InstStrain)
+hold on
+plot(t*10^6,MidStrainXY)
+plot(t*10^6,creep)
+hold off
+
+xlabel('time (\mus)')
+ylabel('Shear Strain')
+legend('instaneous','total','creep')
+
+
+saveas(gcf,strcat(testdeg,'MidShear_strains.fig'));
+saveas(gcf,strcat(testdeg,'MidShear_strains.png'));
+
+%% stresses
+
+InstStress=G0*MidStrainXY;
+CreepStress=G0*creep;
+
+figure(5)
+plot(t*10^6,InstStress)
+ylabel('Shear Stress')
+hold on
+plot(t*10^6,CreepStress)
+plot(t*10^6,MidStressXY)
+yyaxis right
+ylabel('exp(-t/\tau)')
+plot(t*10^6,DecayFactor)
+
+hold off
+legend('Instaneous','Creep','Actual','Decay Factor')
+xlabel('time (\mus)')
+
+saveas(gcf,strcat(testdeg,'MidShear_stresses.fig'));
+saveas(gcf,strcat(testdeg,'MidShear_stresses.png'));
+
+%% Plot Effective modulus
+Geff=MidStressXY./(2*MidStrainXY);
+
+% for k=1:length(MidStressXY)
+%     if abs(Geff(k))==inf
+%         Geff(k)=G0;
+%     end
+% end
+
+figure(6)
+yyaxis left
+plot(t*10^6,Geff)
+ylabel('Geff')
+ylim([-max(Geff),max(Geff)])
+hold on
+plot([min(t),max(t)]*10^6,[G0,G0])
+plot([min(t),max(t)]*10^6,[G0-G1,G0-G1])
+hold off
+yyaxis right
+plot(t*10^6,MidStressXY)
+ylim([min(MidStressXY),-min(MidStressXY)])
+ylabel('Stress')
+xlabel('time (\mu s)')
+legend('G_{eff}','G0','G_{\infty}','stress')
+
+saveas(gcf,strcat(testdeg,'stressGeff_time.fig'));
+saveas(gcf,strcat(testdeg,'StressGeff_time.png'));
+
+
+%% plot stress time and strain time
+figure(7)
+yyaxis left
+plot(t*10^6,MidStressXY)
+ylabel('stress(Pa)')
+ylim([min(MidStressXY),-min(MidStressXY)])
+yyaxis right
+plot(t*10^6,MidStrainXY)
+ylabel('strain')
+ylim([min(MidStrainXY),-min(MidStrainXY)])
+xlabel('time (\mu s)')
+
+saveas(gcf,strcat(testdeg,'stress_strain_time.fig'));
+saveas(gcf,strcat(testdeg,'Stress_strain_time.png'));
+
+%%
+%% plot stress time and strain time with Geff
+figure(8)
+yyaxis left
+plot(t*10^6,MidStressXY)
+ylabel('stress(Pa)')
+ylim([min(MidStressXY),-min(MidStressXY)])
+yyaxis right
+plot(t*10^6,MidStrainXY)
+ylabel('strain')
+ylim([min(MidStrainXY),-min(MidStrainXY)])
+xlabel('time (\mu s)')
+
+saveas(gcf,strcat(testdeg,'stress_strainGeff_time.fig'));
+saveas(gcf,strcat(testdeg,'Stress_strainGeff_time.png'));
+
+%% calculate and plot tangent modulus
+
+G_tan=zeros(size(MidStressXY));
+G_tan(1)=G0
+for k=2:length(MidStressXY)
+    G_tan(k)=(MidStressXY(k)-MidStressXY(k-1))/(MidStrainXY(k)...
+        -MidStrainXY(k-1));
+end
+
+figure(9)
+plot(t*10^6,G_tan)
+hold on
+plot([t(1),t(end)]*10^6,[G0,G0],'--')
+plot([t(1),t(end)]*10^6,[Ginf,Ginf],'--')
+hold off
+xlabel('time (\mu{}s)')
+ylabel('G_{tan} (Pa)')
+legend('Tangent modulus','G_0','G_{\infty}')
+
+saveas(gcf,strcat(testdeg,'tangent_modulus.fig'));
+saveas(gcf,strcat(testdeg,'tangent_modulus.png'));
+
+%% Plot tangent modulus with strain
+figure(10)
+plot(t*10^6,G_tan)
+hold on
+plot([t(1),t(end)]*10^6,[G0,G0],'--')
+plot([t(1),t(end)]*10^6,[Ginf,Ginf],'--')
+hold off
+xlabel('time (\mu{}s)')
+ylabel('G_{tan} (Pa)')
+legend('Tangent modulus','G_0','G_{\infty}')

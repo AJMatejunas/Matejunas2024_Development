@@ -1,0 +1,354 @@
+%This code is written to compare the strain in the zz direction for
+%different shear modulus values to investigate the effect of shear modulus
+%on predicted bulk response. 
+
+%% Load Reference Material Properties
+[RefPar.Name,RefPar.Path]=uigetfile('*.mat',...
+    'Choose file containing reference parameters');
+RefPar.File=strcat(RefPar.Path,'/',RefPar.Name);
+RefPar=load(RefPar.File,'MatProps');
+
+%% Load finite element data
+[FE.name,FE.path]=uigetfile('*.mat','Choose File containing FE fields');
+FE.file=strcat(FE.path,'/',FE.name);
+
+fprintf('Loading finite element fields \n')
+FE=load(FE.file);
+
+fprintf('Kinematic fields loaded \n')
+
+%% Calculate strain from images
+%% Choose first image frame
+[imageFile,imagePath] = uigetfile({'*.*','All Files'}, ...
+    'Select the first image in the sequence');
+%% Add Process function path
+funcPath = uigetdir(pwd,'Locate Processing Function Folder');
+addpath(funcPath);
+addpath([funcPath,'GridMethodToolbox\']);
+
+%% Find processing parameter file
+[initFile,initPath,~] = uigetfile('*.mat', ...
+    'Locate processing parameter file');
+load([initPath,initFile])
+
+%% Define smoothing opts for no smoothing
+smoothingOpts.FFTempSmooth=0;
+smoothingOpts.WATempSmooth=0;
+smoothingOpts.spatialSmooth=0; 
+imageNoise.addNoise=false;
+%% Define Sample Condtioning Options
+CondOpts.ImpCens=15;
+CondOpts.FreeCens=20;
+CondOpts.Xds=3;
+CondOpts.Yds=1;
+CondOpts.Tds=1;
+
+
+if CondOpts.Tds <=1
+    CondOpts.TempDS=false;
+else
+    CondOpts.TempDS=true;
+end
+   
+%% Determine weather to run interpolated correction on the displacement 
+    %fields
+    
+fprintf('Determining dispacement filed correction options \n')
+% quest='Correct Disp fields?';
+% dlgtitle='Displacement correction';
+% DispCorr.Opt=questdlg(quest,dlgtitle,'Yes');
+% clear quest dlgtitle
+% 
+%Displacement corrections are hardcoded
+DispCorr.Opt='Yes';
+DispCorr.int=10;
+DispCorr.Method='LinGrad';
+DispCorr.PitchFitKern=2;
+DispCorr.strainMethod='GridPeriod';
+DispCorr.strainPitchNum=2;
+
+%% Run Grid method displacement measurement
+fprintf('\n--------------------------------------------------------------\n')
+fprintf('GRID METHOD PROCESSING\n')
+fprintf('--------------------------------------------------------------\n')
+
+%--------------------------------------------------------------------------
+% GRID IMAGE PROCESSING
+
+gridDataSavePath = imagePath;
+gridDataFile = 'GridMethod_ProcessedData.mat';
+
+fprintf('Checking for existing processed data file.\n')
+processGridImages = true;
+fprintf('Processing images using the grid method toolbox.\n')
+% Process the image squence with the grid method toolbox
+[grid,pos,disp] = func_gridMethodImageProcessing_AJM(imagePath,...
+    imageFile,...
+    grid,gridMethodOpts,imageNoise);
+
+% Update Geometry and Number of Frames Based on Displacement Matrix Size
+fprintf('Updating geometry variables based on the size of displacement field matrices.\n')
+[specimen,grid] = func_updateSpecGeom(specimen,grid,disp);
+
+% Create the time vector based on the number of frames in the disp struct
+time.numFrames = size(disp.x,3);
+time.vec = 0:time.step:(size(disp.x,3)-1)*time.step;
+
+%Create arrays of x and y vectors
+X_vec=pos.x;
+Y_vec=pos.y;
+
+
+ %% POST-PROCESSING: Smoothing and Kinematic Field Derivation
+    % Smooth the displacement data and then calculate acceleration and strains
+    % Extrapolate the data to account for the missing pitch on the edges
+    fprintf('\n--------------------------------------------------------------\n')
+    fprintf('POST PROCESSING: Smoothing and Kinematic Field Calculation\n')
+    fprintf('--------------------------------------------------------------\n')
+    
+    %% Perfom corrections if needed
+    switch    DispCorr.Opt
+        case 'Yes'
+            fprintf('Saving Raw Displacement Fields \n')
+            RawDisp=disp;
+            fprintf('Correcting Grid Method Displacements along specimen edges')
+            [disp,DispCorr,grid,ProgramVersions]=func_CorrectGMDisp(disp,...
+                DispCorr,grid,pos);
+
+        case 'No'
+            fprintf('No Displacement corrections performed \n')
+    end
+
+
+    % Calculate the kinematic fields from displacement fields using
+    % displacements from images or displacements from FE data
+    
+        %--------------------------------------------------------------------------
+        % Load the Reference Image and Determine Where the Free Edge is
+        fprintf('Obtaining and setting the free edge location.\n')
+        [freeEdge,specimen,disp] = func_getFreeEdge(globalOpts.hardCodeFreeEdge,...
+            imagePath,imageFile,specimen,disp);
+
+        %--------------------------------------------------------------------------
+        % Smooth and Calculate Strain
+        fprintf('Calculating strain from the displacement fields.\n')
+        [disp,strain,strainRate] = func_smoothCalcStrain(globalOpts,pos,time,...
+            grid,disp,smoothingOpts,extrapOpts);
+        %Post Correct Strain
+        %strain=func_PostCorrectShear(grid,strain,pos,time,DispCorr,...
+            %smoothingOpts);
+        %--------------------------------------------------------------------------
+        % Smooth and Calculate Acceleration
+        fprintf('Calculating acceleration from the displacement fields.\n')
+        [disp,~,accel] = func_smoothCalcAccel(pos,time,grid,disp,smoothingOpts,...
+            extrapOpts,diffOpts);
+
+        % Remove some 3D fields from the structs to save memory.
+        if globalOpts.reduceMemory
+            disp.x = disp.extrap.x;
+            disp.y = disp.extrap.y;
+            disp = rmfield(disp,'extrap');
+            disp = rmfield(disp,'tSmooth');
+        end
+        %     else
+        %         fprintf('Using kinematic fields directly from FE data.\n')
+        %         % For pure FE data the kinematic fields can be taken directly from the
+        %         % FE calculation
+        %         disp.xAvg = func_avgFFVarOverWidth(disp.x);
+        %         accel.xAvg = func_avgFFVarOverWidth(accel.x);
+        %         strain.xAvg = func_avgFFVarOverWidth(strain.x);
+        %         strain.yAvg = func_avgFFVarOverWidth(strain.y);
+        %         [strainRate,~] = func_calculateStrainRate(strain,time,smoothingOpts,true);
+        %         strainRate.xAvg = func_avgFFVarOverWidth(strainRate.x);
+        %         strainRate = func_calcMaxStrainRate(smoothingOpts,grid,strainRate);
+        %         disp.extrap.x = disp.x;
+        %         disp.extrap.y = disp.y;
+  
+
+%% Define parameter inputs
+Kexact=RefPar.MatProps.Ki;
+Gexact=RefPar.MatProps.Gi;
+Tau_exact=RefPar.MatProps.tau;
+
+Gp50.G=Gexact*1.5;
+Gm50.G=Gexact*0.5;
+
+Gident=8.8737e+08;
+Kident=Kexact*(1-.07);
+
+
+%% Calculate strain33 with reference inputs
+FE.StressModel=func_ViscoConstitutiveV6(FE.strain.x,FE.strain.y, ...
+    FE.strain.s,FE.time.vec,RefPar.MatProps,0,0,0);
+
+%Exact constitutive inputs
+Exact.StressModel=func_ViscoConstitutiveV6(strain.x,strain.y,strain.s, ...
+    time.vec,RefPar.MatProps,0,0,0);
+
+%Exact K and Identified G
+IdentG.MatProps=RefPar.MatProps;
+IdentG.MatProps.Gi=Gident;
+IdentG.StressModel=func_ViscoConstitutiveV6(strain.x,strain.y,strain.s, ...
+    time.vec,IdentG.MatProps,0,0,0);
+
+%Identified K and G
+IdentKG.MatProps=IdentG.MatProps;
+IdentKG.MatProps.Ki=Kident;
+IdentKG.StressModel=func_ViscoConstitutiveV6(strain.x,strain.y,strain.s, ...
+    time.vec,IdentKG.MatProps,0,0,0);
+
+%exact K and exact G plus 50%
+Gp50.MatProps=RefPar.MatProps;
+Gp50.MatProps.Gi=Gp50.G;
+Gp50.StressModel=func_ViscoConstitutiveV6(strain.x,strain.y,strain.s, ...
+    time.vec,Gp50.MatProps,0,0,0);
+
+%exact K and exact G minus 50%
+Gm50.MatProps=RefPar.MatProps;
+Gm50.MatProps.Gi=Gm50.G;
+Gm50.StressModel=func_ViscoConstitutiveV6(strain.x,strain.y,strain.s, ...
+    time.vec,Gm50.MatProps,0,0,0);
+
+%% Calculate average strain33
+FE.strain.zAvg=FE.StressModel.ZZAvstrain;
+Exact.strain.zAvg=Exact.StressModel.ZZAvstrain;
+IdentG.strain.zAvg=IdentG.StressModel.ZZAvstrain;
+IdentG.strain.zAvg=IdentG.StressModel.ZZAvstrain;
+IdentKG.strain.zAvg=IdentKG.StressModel.ZZAvstrain;
+Gm50.strain.zAvg=Gm50.StressModel.ZZAvstrain;
+Gp50.strain.zAvg=Gp50.StressModel.ZZAvstrain;
+
+%% Get indexes for 1-D plots
+% Set Position Indexes for Grid image data
+    GridPos.NumPoints=size(disp.x,2);
+    GridPos.Free=20; %4 pitches from free edge
+    GridPos.Mid=round(GridPos.NumPoints/2);
+    GridPos.Imp=GridPos.NumPoints-20; %4 pitches from impact edge
+    % Get cooridinates of position indexes
+    GridPos.Xfree=pos.x(GridPos.Free);
+    GridPos.Xmid=pos.x(GridPos.Mid);
+    GridPos.Ximp=pos.x(GridPos.Imp);
+
+    %Set Position indexes and coordintes for finite element data
+    FEPos.NumPoints=size(FE.disp.x,2);
+    FEPos.GridRat=FEPos.NumPoints/GridPos.NumPoints;
+    FEPos.Free=round(GridPos.Free*FEPos.GridRat); %4 pitches from free edge
+    FEPos.Mid=round(FEPos.NumPoints/2);
+    FEPos.Imp=round(GridPos.Imp*FEPos.GridRat); %4 pitches from impact edge
+    
+    FEPos.Xfree=FE.pos.x(FEPos.Free);
+    FEPos.Xmid=FE.pos.x(FEPos.Mid);
+    FEPos.Ximp=FE.pos.x(FEPos.Imp);
+    
+  %Print Plot selections for evaluation purposes
+  FEPos.freeString=num2str(FEPos.Xfree);
+  GridPos.freeString=num2str(GridPos.Xfree);
+  fprintf(strcat('Free Coordinate FE:',FEPos.freeString,' Grid: ',...
+      GridPos.freeString,'\n'));
+  
+  FEPos.midString=num2str(FEPos.Xmid);
+  GridPos.midString=num2str(GridPos.Xmid);
+  fprintf(strcat('Mid Coordinate FE:',FEPos.midString,' Grid: ',...
+      GridPos.midString,'\n'));
+
+  FEPos.impString=num2str(FEPos.Ximp);
+  GridPos.impString=num2str(GridPos.Ximp);
+  fprintf(strcat('Impact Coordinate FE:',FEPos.impString,' Grid: ',...
+      GridPos.impString,'\n'));
+
+%% Generate Plots
+timevec=time.vec*10^6;
+
+figure('units','normalized','outerposition',[0 0 1 1])
+
+subplot(1,3,1)
+plot(timevec,FE.strain.zAvg(FEPos.Imp,:),'k')
+hold on
+plot(timevec,Exact.strain.zAvg(GridPos.Imp,:),'--k')
+plot(timevec,Gm50.strain.zAvg(GridPos.Imp,:),'--r')
+plot(timevec,Gp50.strain.zAvg(GridPos.Imp,:),'--b')
+plot(timevec,IdentG.strain.zAvg(GridPos.Imp,:),'b')
+plot(timevec,IdentKG.strain.zAvg(GridPos.Imp),'r')
+hold off
+
+title('4P from Impact')
+xlabel('time (\mu s)')
+ylabel('$\varepsilon_{33}$','Interpreter','latex')
+legend('FE','Exact','0.5G','1.5G','G_{ident}','ident', ...
+    'location','northwest')
+
+
+subplot(1,3,2)
+plot(timevec,FE.strain.zAvg(FEPos.Mid,:),'k')
+hold on
+plot(timevec,Exact.strain.zAvg(GridPos.Mid,:),'--k')
+plot(timevec,Gm50.strain.zAvg(GridPos.Mid,:),'--r')
+plot(timevec,Gp50.strain.zAvg(GridPos.Mid,:),'--b')
+plot(timevec,IdentG.strain.zAvg(GridPos.Mid,:),'b')
+plot(timevec,IdentKG.strain.zAvg(GridPos.Mid),'r')
+hold off
+
+title('Specimen Middle')
+xlabel('time (\mu s)')
+ylabel('$\varepsilon_{33}$','Interpreter','latex')
+legend('FE','Exact','0.5G','1.5G','G_{ident}','ident', ...
+    'location','northwest')
+
+subplot(1,3,3)
+plot(timevec,FE.strain.zAvg(FEPos.Mid,:),'k')
+hold on
+plot(timevec,Exact.strain.zAvg(GridPos.Mid,:),'--k')
+plot(timevec,Gm50.strain.zAvg(GridPos.Mid,:),'--r')
+plot(timevec,Gp50.strain.zAvg(GridPos.Mid,:),'--b')
+plot(timevec,IdentG.strain.zAvg(GridPos.Mid,:),'b')
+plot(timevec,IdentKG.strain.zAvg(GridPos.Mid),'r')
+hold off
+
+title('4P from Free Surface')
+xlabel('time (\mu s)')
+ylabel('$\varepsilon_{33}$','Interpreter','latex')
+legend('FE','Exact','0.5G','1.5G','G_{ident}','ident', ...
+    'location','northwest')
+
+%% Check by plotting stress in the x axis
+FE.stress.xAvg=squeeze(mean(FE.stress.x));
+
+figure('units','normalized','outerposition',[0 0 1 1])
+subplot(1,3,1)
+plot(timevec,FE.stress.xAvg(FEPos.Imp,:),'k')
+hold on
+plot(timevec,Gm50.StressModel.Avxx(GridPos.Imp,:),'--r')
+plot(timevec,Gp50.StressModel.Avxx(GridPos.Imp,:),'--b')
+hold off
+
+title('4P from Impact')
+xlabel('time (\mu s)')
+ylabel('$\sigma_{11}$','Interpreter','latex')
+legend('FE','0.5G','1.5G', ...
+    'location','northwest')
+
+subplot(1,3,2)
+plot(timevec,FE.stress.xAvg(FEPos.Mid,:),'k')
+hold on
+plot(timevec,Gm50.StressModel.Avxx(GridPos.Mid,:),'--r')
+plot(timevec,Gp50.StressModel.Avxx(GridPos.Mid,:),'--b')
+hold off
+
+title('Specimen Middle')
+xlabel('time (\mu s)')
+ylabel('$\sigma_{11}$','Interpreter','latex')
+legend('FE','0.5G','1.5G', ...
+    'location','northwest')
+
+subplot(1,3,3)
+plot(timevec,FE.stress.xAvg(FEPos.Free,:),'k')
+hold on
+plot(timevec,Gm50.StressModel.Avxx(GridPos.Free,:),'--r')
+plot(timevec,Gp50.StressModel.Avxx(GridPos.Free,:),'--b')
+hold off
+
+title('4P from Free')
+xlabel('time (\mu s)')
+ylabel('$\sigma_{11}$','Interpreter','latex')
+legend('FE','0.5G','1.5G', ...
+    'location','northwest')

@@ -1,0 +1,146 @@
+% This code is written to compare the evolution of instantaneous shear
+    % modulus and Poisson's ratio
+    
+    clear all; close all; clc
+ %% Choose data and test designation
+ desig=char(inputdlg('Input Test Designation'));
+ 
+ [FEfile,FEpath]=uigetfile('*.mat','Load file containing FE stresses');
+ FEname=strcat(FEpath,'/',FEfile);
+ 
+ [Modelfile,Modelpath]=uigetfile('*.mat',...
+     'Load file containing constitutive model data');
+ Modelname=strcat(Modelpath,'/',Modelfile);
+ 
+ 
+  
+ %% Load data file and define test deg
+fprintf('Loading FE data \n')
+FE=load(FEname);
+
+fprintf('Loading Constitutive Model Data \n')
+testdeg=desig;
+clear desig
+
+%% Create position an dtime vectors
+X_vec=FE.X_vec;
+Y_vec=FE.Y_vec;
+timemic=GM.time.vec*10^6; %us
+
+Xcoord=X_vec*10^3;
+Ycoord=Y_vec*10^3;
+
+%% Calculate shear moduli
+fprintf('Calculating Instantneous Shear Modulus for FE data \n')
+FE.Ginst=FE.stress.s./FE.strain.s;
+
+fprintf('Calculating instantaneous shear modulus for Model data \n')
+Model.Ginst=Model.StressModel.xy./Model.strainxy;
+
+%ratio of instantaneous shear moduli
+GinstRat=Model.Ginst./Fe.Ginst;
+
+%% Generate limits 
+FE.Gmax=max(FE.Ginst,[],'all');
+FE.Gmin=min(FE.Ginst,[],'all');
+
+Model.Gmax=max(Model.Ginst,[],'all');
+Model.Gmin=min(Model.Ginst,[],'all');
+
+if FE.Gmax>=Model.Gmax
+    GupLim=FE.Gmax;
+else 
+    GupLim=Model.Gmax;
+end
+
+if FE.Gmin<=Model.Gmin
+    GlowLim=FE.Gmin;
+else
+    GlowLim=Model.Gmin;
+end
+GLim=[GlowLim,GupLim];
+
+RatLim=[min(GinstRat,[],'all'),max(GinstRat,[],'all')];
+
+%% generate plots
+figure('units','normalized','outerposition',[0 0 1 1])
+for n=1:length(timemic)
+   timecount=num2str(timemic(n)); 
+   framecount=num2str(n); 
+   
+  FEinst=squeeze(FE.Ginst(:,:,n));
+  Modelinst=squeeze(Model.Ginst(:,:,n));
+  Rat=squeeze(GinstRat(:,:,n));   
+   
+   %% Plot Instanteous Shear Modulus FE
+    subplot(3,1,1)
+    imagesc(Xcoord,Ycoord,FEinst)
+    title(strcat(' FE G_{inst}',timecount,'\mus'))
+    xlabel('X coordinate (mm)')
+    ylabel('Y coordinate (mm)')
+    colormap('hot')
+    cx=colorbar;
+    cx.Label.String='G_{inst} (Pa)';
+    caxis(Glim)
+    
+       
+  %% plot strains
+    subplot(3,1,2)
+    imagesc(Xcoord,Ycoord,Modelinst)
+    title(strcat(' Model G_{inst}',timecount,'\mus'))
+    xlabel('X coordinate (mm)')
+    ylabel('Y coordinate (mm)')
+    colormap('hot')
+    cx=colorbar;
+    cx.Label.String='Strain';
+    caxis(XXstrainLim)
+    
+    subplot(3,2,4)
+    imagesc(Xcoord,Ycoord,XYstrain)
+    title(strcat('strain_{xy} ',timecount,'\mus'))
+    xlabel('X coordinate (mm)')
+    ylabel('Y coordinate (mm)')
+    colormap('hot')
+    cx=colorbar;
+    cx.Label.String='Shear strain';
+    caxis(XYstrainLim)
+    
+  %% plot rates
+  subplot(3,2,5)
+    imagesc(X_vecGM,Y_vecGM,Xrate)
+    title(strcat('strain Rate_{xx} ',timecount,'\mus'))
+    xlabel('X coordinate (mm)')
+    ylabel('Y coordinate (mm)')
+    colormap('default')
+    cx=colorbar;
+    cx.Label.String='Strain Rate s^-1';
+    caxis(XXRateLim)
+    
+    subplot(3,2,6)
+    imagesc(X_vecGM,Y_vecGM,XYrate)
+    title(strcat('strain Rate_{xy} ',timecount,'\mus'))
+    xlabel('X coordinate (mm)')
+    ylabel('Y coordinate (mm)')
+    colormap('jet')
+    cx=colorbar;
+    cx.Label.String='Shear Strain Rate s^-1';
+    caxis(XYRateLim)
+    
+a=findall(gcf,'Type','axes');
+h=findall(gcf,'Type','line');
+t=findall(gcf,'Type','text');
+
+set(t, ...
+    'FontName','Helvetica', ...
+    'FontSize',18, ...
+    'FontWeight','bold' );
+
+set(a                ,               ...
+    'FontName'       , 'Helvetica' , ...
+    'FontSize'       , 18     , ...
+    'FontWeight'     , 'normal');
+
+    
+ saveas(gcf,strcat(testdeg,'_Fields_',framecount,'.fig'))
+ saveas(gcf,strcat(testdeg,'_Fields_',framecount,'.png'))
+end

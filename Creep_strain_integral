@@ -1,0 +1,15 @@
+% This code is written to investigate the integral in the Shear stress
+    % equation for ABAQUS linear viscoelasticity in the time domain
+    
+%% initialize
+clear all, close all, clc
+
+%% Select data to load
+filename=uigetfile('*.mat','select SG data')
+
+%% load
+fprintf('loading data \n')
+load(filename)
+
+%% Choose point from the middle of the sample
+
